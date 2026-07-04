@@ -30,9 +30,14 @@ if (r.valid && r.keyTrusted) {
 ```
 
 - `valid` — signature + payload hash + receiptId + disclaimer + forbidden-word
-  checks all hold (integrity). **This is what gates trust.**
+  checks all hold (internal self-consistency). **`valid` alone does NOT prove the
+  receipt came from Raven** — any key, including an attacker's, can sign a
+  self-consistent receipt. Accept a receipt only when `valid && keyTrusted`.
 - `keyTrusted` — present only when you pass `trustedKeys`: was it signed by
-  Raven's published key? (non-fatal, reported separately)
+  Raven's published key? This is what actually establishes authorship.
+- `trusted` — convenience field, present only when you pass `trustedKeys`:
+  equals `valid && keyTrusted`. Gate on this (or on both fields) to accept a
+  genuine Raven receipt.
 - `stale` — older than the receipt's own `maxAgeSeconds` (freshness, not tampering).
 - `reasons` — every relevant failed check, accumulated.
 

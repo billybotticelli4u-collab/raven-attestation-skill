@@ -116,7 +116,7 @@ export interface VerifyOptions {
 }
 
 export interface VerifyResult {
-  /** True iff shape, disclaimer, forbidden-word, payload hash, receiptId, and signature all hold. */
+  /** True iff the receipt is internally self-consistent: shape, disclaimer, forbidden-word, payload hash, receiptId, and signature all hold. NOTE: this does NOT prove the receipt came from Raven — any key (including an attacker's) can sign a self-consistent receipt. Use `trusted` (or `valid && keyTrusted`) to accept a genuine Raven attestation. */
   valid: boolean;
   /** True iff the receipt is older than its own maxAgeSeconds. Staleness != tampered. */
   stale: boolean;
@@ -124,6 +124,12 @@ export interface VerifyResult {
   reasons: string[];
   /** Present only when `trustedKeys` was supplied. */
   keyTrusted?: boolean;
+  /**
+   * True iff the receipt is BOTH internally valid AND signed by one of the supplied
+   * `trustedKeys` (`valid && keyTrusted`). This — not `valid` alone — is what establishes
+   * that a receipt genuinely came from Raven. Present only when `trustedKeys` was supplied.
+   */
+  trusted?: boolean;
 }
 
 const collectStrings = (value: unknown, out: string[] = []): string[] => {
@@ -204,7 +210,13 @@ export const verifyRavenReceipt = (receipt: unknown, opts: VerifyOptions = {}): 
   const body = extractBody(r);
   for (const w of findForbiddenWords(collectStrings(body))) reasons.push(`forbidden_word:${w}`);
 
-  if (recomputePayloadHash(body) !== r.payloadHash) reasons.push("payload_hash_mismatch");
+  let recomputed: string | null = null;
+  try {
+    recomputed = recomputePayloadHash(body);
+  } catch {
+    recomputed = null; // non-canonicalizable body (e.g. non-finite number) → treat as mismatch, never throw
+  }
+  if (recomputed !== r.payloadHash) reasons.push("payload_hash_mismatch");
   if (r.receiptId !== RECEIPT_ID_PREFIX + (r.payloadHash as string)) reasons.push("receipt_id_mismatch");
 
   const signedBytes = canonicalJsonStringify({
@@ -233,7 +245,10 @@ export const verifyRavenReceipt = (receipt: unknown, opts: VerifyOptions = {}): 
   const stale = Number.isFinite(ageSeconds) && ageSeconds > (r.maxAgeSeconds as number);
   if (stale) reasons.push("stale");
 
-  return { valid, stale, reasons, ...(keyTrusted === undefined ? {} : { keyTrusted }) };
+  return {
+    valid, stale, reasons,
+    ...(keyTrusted === undefined ? {} : { keyTrusted, trusted: valid && keyTrusted === true }),
+  };
 };
 
 // ---------------------------------------------------------------------------

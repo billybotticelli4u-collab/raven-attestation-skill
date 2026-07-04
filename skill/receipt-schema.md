@@ -59,6 +59,10 @@ keeps the integration trustworthy — silence must never imply a clean result.
   the facts were true at `slot`. Re-fetch for a current view.
 - `valid: false` ⇒ integrity failed (bad signature, altered field, wrong hash).
   **Never** use an invalid receipt.
+- `valid: true` ⇒ the receipt is internally self-consistent — but this alone does
+  **not** prove it came from Raven. Any key can sign a self-consistent receipt.
+  To accept it as a genuine Raven attestation you also need `keyTrusted` (i.e. the
+  `trusted` field, = `valid && keyTrusted`), verified against `/pubkey`.
 
 ## Replayability
 
