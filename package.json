@@ -1,0 +1,14 @@
+{
+  "name": "raven-attestation",
+  "version": "0.1.0",
+  "description": "Zero-dependency verifier and skill for signed Raven token-evidence receipts on Solana.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types lib/example-verify.ts && node --experimental-strip-types lib/verify.test.ts && node --experimental-strip-types lib/fetch.test.ts"
+  }
+}
