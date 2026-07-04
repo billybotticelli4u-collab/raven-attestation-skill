@@ -129,6 +129,21 @@ check("garbage now still returns a verdict (valid true for real receipt)", verif
 noThrow("null opts does not throw", () => verifyRavenReceipt(bonk.input, null as any));
 check("null opts still returns valid=true for real receipt", verifyRavenReceipt(bonk.input, null as any).valid === true);
 
+// Fail-closed: evidence nested beyond the scan-depth cap must NOT silently pass.
+const deep: any = JSON.parse(JSON.stringify(bonk.input));
+let node: any = {};
+const deepEvidence = node;
+for (let i = 0; i < 5000; i++) { node.child = {}; node = node.child; }
+node.safe = true; // a forbidden verdict word buried deep, below the cap
+if (Array.isArray(deep.findings) && deep.findings.length) deep.findings[0].evidence = deepEvidence;
+else deep.findings = [{ code: "x", source: "x", evidence: deepEvidence }];
+let deepThrew = false;
+let deepRes: ReturnType<typeof verifyRavenReceipt> | null = null;
+try { deepRes = verifyRavenReceipt(deep, { now: bonk.input.timestamp }); } catch { deepThrew = true; }
+check("deep evidence does not throw", !deepThrew);
+check("deep evidence fails closed (valid=false)", deepRes?.valid === false);
+check("deep evidence reports evidence_too_deep", deepRes?.reasons.includes("evidence_too_deep") === true);
+
 console.log(
   failures === 0
     ? `\n✅ All ${"regression"} checks passed.`

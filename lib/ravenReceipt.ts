@@ -132,17 +132,29 @@ export interface VerifyResult {
   trusted?: boolean;
 }
 
-const collectStrings = (value: unknown, out: string[], seen: WeakSet<object> = new WeakSet(), depth = 0): void => {
+/** Max evidence nesting the forbidden-word scan will descend. Beyond this the
+ *  scan cannot guarantee completeness, so it fails CLOSED (records truncation)
+ *  rather than silently skipping the subtree. */
+const MAX_EVIDENCE_DEPTH = 256;
+
+const collectStrings = (
+  value: unknown,
+  out: string[],
+  state: { truncated: boolean },
+  seen: WeakSet<object> = new WeakSet(),
+  depth = 0,
+): void => {
   if (typeof value === "string") { out.push(value); return; }
-  if (depth > 256 || value === null || typeof value !== "object") return;
-  if (seen.has(value as object)) return;
+  if (value === null || typeof value !== "object") return;
+  if (depth > MAX_EVIDENCE_DEPTH) { state.truncated = true; return; } // fail closed, not a silent skip
+  if (seen.has(value as object)) return; // cycle guard: a revisited object hides no new content
   seen.add(value as object);
   if (Array.isArray(value)) {
-    for (const v of value) collectStrings(v, out, seen, depth + 1);
+    for (const v of value) collectStrings(v, out, state, seen, depth + 1);
   } else {
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       out.push(k);
-      collectStrings(v, out, seen, depth + 1);
+      collectStrings(v, out, state, seen, depth + 1);
     }
   }
 };
@@ -221,9 +233,13 @@ export const verifyRavenReceipt = (receipt: unknown, opts: VerifyOptions = {}): 
     if (r.disclaimer !== RECEIPT_DISCLAIMER) reasons.push("disclaimer_mismatch");
 
     const body = extractBody(r);
+    const scanState = { truncated: false };
     const bodyStrings: string[] = [];
-    collectStrings(body, bodyStrings);
+    collectStrings(body, bodyStrings, scanState);
     for (const w of findForbiddenWords(bodyStrings)) reasons.push(`forbidden_word:${w}`);
+    // Fail CLOSED: if evidence is nested past the scan-depth cap the forbidden-word
+    // scan is incomplete, so a buried verdict word could hide. Treat as fatal.
+    if (scanState.truncated) reasons.push("evidence_too_deep");
 
     let recomputed: string | null = null;
     try {

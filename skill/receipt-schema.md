@@ -60,6 +60,10 @@ keeps the integration trustworthy — silence must never imply a clean result.
 - An unparseable/missing `timestamp` cannot be marked stale (age is unknown); the
   verifier surfaces this as a non-fatal `timestamp_unparseable` reason. It never
   flips `valid` — for genuine receipts the signed timestamp always parses.
+- The forbidden-word scan must be complete. If `evidence` is nested deeper than the
+  verifier's scan-depth limit, the receipt fails **closed** with a fatal
+  `evidence_too_deep` reason (`valid: false`) — a buried verdict word must never slip
+  past an incomplete scan. Genuine receipts carry shallow evidence and never hit this.
 - `valid: false` ⇒ integrity failed (bad signature, altered field, wrong hash).
   **Never** use an invalid receipt.
 - `valid: true` ⇒ the receipt is internally self-consistent — but this alone does
