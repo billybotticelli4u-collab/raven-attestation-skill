@@ -71,8 +71,11 @@ const receipt = await fetchReceipt({
   tokenProgramAddress: "<owning program>",   // see "Resolve the token program" below
   apiKey: process.env.RAVEN_API_KEY!,         // dev/test key only
   // commitment: "finalized" (default)
+  // timeoutMs: 15000 (default) — raise for a cold-starting host, lower for latency-sensitive checks
 });
 ```
+
+A fetched receipt is untrusted until you verify it locally — always pass it through `verifyRavenReceipt` (and check `valid && keyTrusted`) before acting on it.
 
 ### Resolve the token program for a mint (required input)
 

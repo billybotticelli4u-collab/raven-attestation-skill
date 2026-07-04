@@ -256,13 +256,38 @@ export const verifyRavenReceipt = (receipt: unknown, opts: VerifyOptions = {}): 
 // ---------------------------------------------------------------------------
 export const DEFAULT_VERIFIER_URL = "https://raven-hosted-verifier.onrender.com";
 
+/** Default network timeout (ms) for the optional fetch helpers. The hosted
+ *  verifier can cold-start on first request; raise `timeoutMs` if you expect
+ *  a cold start, or lower it for latency-sensitive pre-action checks. */
+export const DEFAULT_TIMEOUT_MS = 15_000;
+
+/** fetch wrapper that enforces a timeout via AbortSignal and turns an abort
+ *  into a clear, catchable error instead of hanging the caller forever. */
+const fetchWithTimeout = async (
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  label: string,
+): Promise<Response> => {
+  try {
+    return await fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
+      throw new Error(`${label} timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  }
+};
+
 /** Fetch Raven's published signing keys from /pubkey. Use the returned set as
  *  `trustedKeys` to confirm a receipt was signed by Raven's published key. */
 export const fetchPublishedKeys = async (
   verifierUrl: string = DEFAULT_VERIFIER_URL,
   fetchImpl: typeof fetch = fetch,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<Set<string>> => {
-  const res = await fetchImpl(`${verifierUrl.replace(/\/+$/, "")}/pubkey`);
+  const res = await fetchWithTimeout(fetchImpl, `${verifierUrl.replace(/\/+$/, "")}/pubkey`, {}, timeoutMs, "/pubkey");
   if (!res.ok) throw new Error(`/pubkey returned HTTP ${res.status}`);
   const body = (await res.json()) as { keys?: Array<{ publicKeyBase64?: string }> };
   return new Set((body.keys ?? []).map((k) => k.publicKeyBase64).filter((k): k is string => typeof k === "string"));
@@ -271,9 +296,9 @@ export const fetchPublishedKeys = async (
 /** Verify a receipt AND confirm it was signed by Raven's currently-published key. */
 export const verifyAgainstPublishedKey = async (
   receipt: unknown,
-  opts: Omit<VerifyOptions, "trustedKeys"> & { verifierUrl?: string; fetchImpl?: typeof fetch } = {},
+  opts: Omit<VerifyOptions, "trustedKeys"> & { verifierUrl?: string; fetchImpl?: typeof fetch; timeoutMs?: number } = {},
 ): Promise<VerifyResult> => {
-  const trustedKeys = await fetchPublishedKeys(opts.verifierUrl ?? DEFAULT_VERIFIER_URL, opts.fetchImpl ?? fetch);
+  const trustedKeys = await fetchPublishedKeys(opts.verifierUrl ?? DEFAULT_VERIFIER_URL, opts.fetchImpl ?? fetch, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   return verifyRavenReceipt(receipt, { now: opts.now, trustedKeys });
 };
 
@@ -282,18 +307,24 @@ export const verifyAgainstPublishedKey = async (
  *  production signer key). `tokenProgramAddress` is the mint's owning program
  *  (SPL Token or Token-2022); resolve it from the mint account's `owner`. */
 export const fetchReceipt = async (
-  args: { mintAddress: string; tokenProgramAddress: string; apiKey: string; verifierUrl?: string; commitment?: string; fetchImpl?: typeof fetch },
+  args: { mintAddress: string; tokenProgramAddress: string; apiKey: string; verifierUrl?: string; commitment?: string; timeoutMs?: number; fetchImpl?: typeof fetch },
 ): Promise<RavenReceipt> => {
   const url = `${(args.verifierUrl ?? DEFAULT_VERIFIER_URL).replace(/\/+$/, "")}/receipt/v1`;
-  const res = await (args.fetchImpl ?? fetch)(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-api-key": args.apiKey },
-    body: JSON.stringify({
-      mintAddress: args.mintAddress,
-      tokenProgramAddress: args.tokenProgramAddress,
-      commitment: args.commitment ?? "finalized",
-    }),
-  });
+  const res = await fetchWithTimeout(
+    args.fetchImpl ?? fetch,
+    url,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": args.apiKey },
+      body: JSON.stringify({
+        mintAddress: args.mintAddress,
+        tokenProgramAddress: args.tokenProgramAddress,
+        commitment: args.commitment ?? "finalized",
+      }),
+    },
+    args.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    "/receipt/v1",
+  );
   if (!res.ok) throw new Error(`/receipt/v1 returned HTTP ${res.status}`);
   return (await res.json()) as RavenReceipt;
 };

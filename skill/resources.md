@@ -10,9 +10,9 @@
 ## In this skill
 - `lib/ravenReceipt.ts` — zero-dependency verifier + fetch helpers (Node ≥ 22.6).
   - `verifyRavenReceipt(receipt, { now?, trustedKeys? })` → `{ valid, stale, reasons, keyTrusted? }`
-  - `fetchPublishedKeys(verifierUrl?)` → `Set<string>` of published keys
+  - `fetchPublishedKeys(verifierUrl?, fetchImpl?, timeoutMs?)` → `Set<string>` of published keys
   - `verifyAgainstPublishedKey(receipt, { verifierUrl? })` → verify + key trust in one call
-  - `fetchReceipt({ mintAddress, tokenProgramAddress, apiKey })` → a fresh receipt (dev key)
+  - `fetchReceipt({ mintAddress, tokenProgramAddress, apiKey, timeoutMs? })` → a fresh receipt (dev key)
 - `lib/example-verify.ts` — offline demo: verifies a real production receipt (BONK) + a tampered one.
 - `lib/fixtures/` — a real production receipt and a tampered receipt for tests/demos.
 
