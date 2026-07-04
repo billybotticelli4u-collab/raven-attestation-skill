@@ -26,7 +26,7 @@ if (r.valid && r.keyTrusted) {
 `verifyRavenReceipt` returns:
 
 ```ts
-{ valid: boolean, stale: boolean, reasons: string[], keyTrusted?: boolean }
+{ valid: boolean, stale: boolean, reasons: string[], keyTrusted?: boolean, trusted?: boolean }
 ```
 
 - `valid` — signature + payload hash + receiptId + disclaimer + forbidden-word

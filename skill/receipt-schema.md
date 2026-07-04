@@ -57,6 +57,9 @@ keeps the integration trustworthy — silence must never imply a clean result.
 
 - `stale: true` ⇒ the receipt is older than `maxAgeSeconds`. It is **not** tampered;
   the facts were true at `slot`. Re-fetch for a current view.
+- An unparseable/missing `timestamp` cannot be marked stale (age is unknown); the
+  verifier surfaces this as a non-fatal `timestamp_unparseable` reason. It never
+  flips `valid` — for genuine receipts the signed timestamp always parses.
 - `valid: false` ⇒ integrity failed (bad signature, altered field, wrong hash).
   **Never** use an invalid receipt.
 - `valid: true` ⇒ the receipt is internally self-consistent — but this alone does

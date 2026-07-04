@@ -74,6 +74,61 @@ const bad = load("tampered-disclaimer.json");
 const tampered = verifyRavenReceipt(bad.input, { now: bad.now });
 check("tampered receipt is invalid", tampered.valid === false);
 
+// Fix: forbidden verdict word used as an object KEY (not just a value) is caught.
+const forbiddenKey = JSON.parse(JSON.stringify(bonk.input));
+if (Array.isArray(forbiddenKey.findings) && forbiddenKey.findings.length > 0) {
+  forbiddenKey.findings[0].evidence = { safe: true };
+} else {
+  forbiddenKey.findings = [{ code: "x", source: "x", evidence: { safe: true } }];
+}
+const fk = verifyRavenReceipt(forbiddenKey, { now: bonk.input.timestamp });
+check("forbidden word as an evidence KEY is detected", fk.reasons.includes("forbidden_word:safe"));
+
+// Fix: an unparseable timestamp is surfaced as a non-fatal reason (does not throw, does not go stale silently).
+const badTs = JSON.parse(JSON.stringify(bonk.input));
+badTs.timestamp = "banana";
+let tsThrew = false;
+let tsResult: ReturnType<typeof verifyRavenReceipt> | null = null;
+try {
+  tsResult = verifyRavenReceipt(badTs, { now: bonk.input.timestamp });
+} catch {
+  tsThrew = true;
+}
+check("unparseable timestamp does not throw", !tsThrew);
+check("unparseable timestamp is reported", tsResult?.reasons.includes("timestamp_unparseable") === true);
+check("unparseable timestamp is not marked stale", tsResult?.stale === false);
+
+// No-throw hardening: verifier must fail closed, never throw, on hostile/garbage input.
+const noThrow = (name: string, fn: () => unknown) => {
+  let threw = false;
+  try { fn(); } catch { threw = true; }
+  check(name, !threw);
+};
+
+// throwing getter on a receipt field
+const getterReceipt: Record<string, unknown> = JSON.parse(JSON.stringify(bonk.input));
+Object.defineProperty(getterReceipt, "slot", { enumerable: true, get() { throw new Error("boom"); } });
+noThrow("throwing getter does not escape", () => verifyRavenReceipt(getterReceipt, { now: bonk.input.timestamp }));
+check("throwing getter yields valid=false", verifyRavenReceipt(getterReceipt, { now: bonk.input.timestamp }).valid === false);
+
+// cyclic evidence
+const cyclic: any = JSON.parse(JSON.stringify(bonk.input));
+if (Array.isArray(cyclic.findings) && cyclic.findings.length) { cyclic.findings[0].evidence = {}; cyclic.findings[0].evidence.self = cyclic.findings[0].evidence; }
+noThrow("cyclic evidence does not overflow", () => verifyRavenReceipt(cyclic, { now: bonk.input.timestamp }));
+check("cyclic evidence yields valid=false", verifyRavenReceipt(cyclic, { now: bonk.input.timestamp }).valid === false);
+
+// non-iterable trustedKeys
+noThrow("non-iterable trustedKeys does not throw", () => verifyRavenReceipt(bonk.input, { now: bonk.input.timestamp, trustedKeys: 123 as any }));
+check("non-iterable trustedKeys → keyTrusted false", verifyRavenReceipt(bonk.input, { now: bonk.input.timestamp, trustedKeys: 123 as any }).keyTrusted === false);
+
+// bad opts.now
+noThrow("garbage now does not throw", () => verifyRavenReceipt(bonk.input, { now: {} as any }));
+check("garbage now still returns a verdict (valid true for real receipt)", verifyRavenReceipt(bonk.input, { now: {} as any }).valid === true);
+
+// null opts
+noThrow("null opts does not throw", () => verifyRavenReceipt(bonk.input, null as any));
+check("null opts still returns valid=true for real receipt", verifyRavenReceipt(bonk.input, null as any).valid === true);
+
 console.log(
   failures === 0
     ? `\n✅ All ${"regression"} checks passed.`

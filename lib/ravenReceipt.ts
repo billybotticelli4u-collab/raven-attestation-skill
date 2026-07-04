@@ -132,12 +132,19 @@ export interface VerifyResult {
   trusted?: boolean;
 }
 
-const collectStrings = (value: unknown, out: string[] = []): string[] => {
-  if (typeof value === "string") out.push(value);
-  else if (Array.isArray(value)) for (const el of value) collectStrings(el, out);
-  else if (value && typeof value === "object")
-    for (const v of Object.values(value as Record<string, unknown>)) collectStrings(v, out);
-  return out;
+const collectStrings = (value: unknown, out: string[], seen: WeakSet<object> = new WeakSet(), depth = 0): void => {
+  if (typeof value === "string") { out.push(value); return; }
+  if (depth > 256 || value === null || typeof value !== "object") return;
+  if (seen.has(value as object)) return;
+  seen.add(value as object);
+  if (Array.isArray(value)) {
+    for (const v of value) collectStrings(v, out, seen, depth + 1);
+  } else {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out.push(k);
+      collectStrings(v, out, seen, depth + 1);
+    }
+  }
 };
 
 const findForbiddenWords = (strings: readonly string[]): string[] => {
@@ -186,8 +193,12 @@ const extractBody = (r: Record<string, unknown>): Record<string, unknown> => {
 const recomputePayloadHash = (body: Record<string, unknown>): string =>
   "sha256:" + createHash("sha256").update(canonicalJsonStringify(body), "utf8").digest("hex");
 
-const toIso = (now: string | Date | undefined): string =>
-  now === undefined ? new Date().toISOString() : typeof now === "string" ? now : now.toISOString();
+const parseWhen = (w: unknown): number => {
+  if (typeof w === "string") return Date.parse(w);
+  if (w instanceof Date) return w.getTime();          // NaN if Invalid Date
+  if (w === undefined) return Date.now();
+  return NaN;                                          // unknown/garbage → unknown age
+};
 
 /**
  * Verify a Raven Receipt v1. `valid` is gated ONLY by steps 1–5 (shape, disclaimer,
@@ -196,59 +207,71 @@ const toIso = (now: string | Date | undefined): string =>
  * failed check.
  */
 export const verifyRavenReceipt = (receipt: unknown, opts: VerifyOptions = {}): VerifyResult => {
-  if (receipt === null || typeof receipt !== "object" || Array.isArray(receipt)) {
-    return { valid: false, stale: false, reasons: ["shape_not_an_object"] };
-  }
-  const r = receipt as Record<string, unknown>;
-  const reasons: string[] = [];
-
-  const shapeReasons = checkShape(r);
-  if (shapeReasons.length > 0) return { valid: false, stale: false, reasons: shapeReasons };
-
-  if (r.disclaimer !== RECEIPT_DISCLAIMER) reasons.push("disclaimer_mismatch");
-
-  const body = extractBody(r);
-  for (const w of findForbiddenWords(collectStrings(body))) reasons.push(`forbidden_word:${w}`);
-
-  let recomputed: string | null = null;
+  if (!opts || typeof opts !== "object") opts = {} as VerifyOptions;
   try {
-    recomputed = recomputePayloadHash(body);
-  } catch {
-    recomputed = null; // non-canonicalizable body (e.g. non-finite number) → treat as mismatch, never throw
-  }
-  if (recomputed !== r.payloadHash) reasons.push("payload_hash_mismatch");
-  if (r.receiptId !== RECEIPT_ID_PREFIX + (r.payloadHash as string)) reasons.push("receipt_id_mismatch");
+    if (receipt === null || typeof receipt !== "object" || Array.isArray(receipt)) {
+      return { valid: false, stale: false, reasons: ["shape_not_an_object"] };
+    }
+    const r = receipt as Record<string, unknown>;
+    const reasons: string[] = [];
 
-  const signedBytes = canonicalJsonStringify({
-    domain: RECEIPT_DOMAIN, version: RECEIPT_VERSION, payloadHash: r.payloadHash,
-  });
-  let signatureOk = false;
-  try {
-    const pub = createPublicKey({
-      key: Buffer.from(r.signerPublicKey as string, "base64"), format: "der", type: "spki",
+    const shapeReasons = checkShape(r);
+    if (shapeReasons.length > 0) return { valid: false, stale: false, reasons: shapeReasons };
+
+    if (r.disclaimer !== RECEIPT_DISCLAIMER) reasons.push("disclaimer_mismatch");
+
+    const body = extractBody(r);
+    const bodyStrings: string[] = [];
+    collectStrings(body, bodyStrings);
+    for (const w of findForbiddenWords(bodyStrings)) reasons.push(`forbidden_word:${w}`);
+
+    let recomputed: string | null = null;
+    try {
+      recomputed = recomputePayloadHash(body);
+    } catch {
+      recomputed = null; // non-canonicalizable body (e.g. non-finite number) → treat as mismatch, never throw
+    }
+    if (recomputed !== r.payloadHash) reasons.push("payload_hash_mismatch");
+    if (r.receiptId !== RECEIPT_ID_PREFIX + (r.payloadHash as string)) reasons.push("receipt_id_mismatch");
+
+    const signedBytes = canonicalJsonStringify({
+      domain: RECEIPT_DOMAIN, version: RECEIPT_VERSION, payloadHash: r.payloadHash,
     });
-    signatureOk = cryptoVerify(null, Buffer.from(signedBytes, "utf8"), pub,
-      Buffer.from(r.signature as string, "base64"));
-  } catch { signatureOk = false; }
-  if (!signatureOk) reasons.push("signature_invalid");
+    let signatureOk = false;
+    try {
+      const pub = createPublicKey({
+        key: Buffer.from(r.signerPublicKey as string, "base64"), format: "der", type: "spki",
+      });
+      signatureOk = cryptoVerify(null, Buffer.from(signedBytes, "utf8"), pub,
+        Buffer.from(r.signature as string, "base64"));
+    } catch { signatureOk = false; }
+    if (!signatureOk) reasons.push("signature_invalid");
 
-  const valid = reasons.length === 0;
+    const valid = reasons.length === 0;
 
-  let keyTrusted: boolean | undefined;
-  if (opts.trustedKeys) {
-    const trusted = opts.trustedKeys instanceof Set ? opts.trustedKeys : new Set(opts.trustedKeys as string[]);
-    keyTrusted = trusted.has(r.signerPublicKey as string);
-    if (!keyTrusted) reasons.push("key_untrusted");
+    let keyTrusted: boolean | undefined;
+    const rawTrusted = opts.trustedKeys;
+    const trustedSupplied = rawTrusted !== undefined && rawTrusted !== null;
+    if (trustedSupplied) {
+      const trusted = (rawTrusted instanceof Set || Array.isArray(rawTrusted))
+        ? new Set<string>(rawTrusted as Iterable<string>)
+        : new Set<string>();
+      keyTrusted = trusted.has(r.signerPublicKey as string);
+      if (!keyTrusted) reasons.push("key_untrusted");
+    }
+
+    const ageSeconds = (parseWhen(opts.now) - Date.parse(r.timestamp as string)) / 1000;
+    if (!Number.isFinite(ageSeconds)) reasons.push("timestamp_unparseable");
+    const stale = Number.isFinite(ageSeconds) && ageSeconds > (r.maxAgeSeconds as number);
+    if (stale) reasons.push("stale");
+
+    return {
+      valid, stale, reasons,
+      ...(keyTrusted === undefined ? {} : { keyTrusted, trusted: valid && keyTrusted === true }),
+    };
+  } catch {
+    return { valid: false, stale: false, reasons: ["internal_error"] };
   }
-
-  const ageSeconds = (Date.parse(toIso(opts.now)) - Date.parse(r.timestamp as string)) / 1000;
-  const stale = Number.isFinite(ageSeconds) && ageSeconds > (r.maxAgeSeconds as number);
-  if (stale) reasons.push("stale");
-
-  return {
-    valid, stale, reasons,
-    ...(keyTrusted === undefined ? {} : { keyTrusted, trusted: valid && keyTrusted === true }),
-  };
 };
 
 // ---------------------------------------------------------------------------
@@ -289,8 +312,16 @@ export const fetchPublishedKeys = async (
 ): Promise<Set<string>> => {
   const res = await fetchWithTimeout(fetchImpl, `${verifierUrl.replace(/\/+$/, "")}/pubkey`, {}, timeoutMs, "/pubkey");
   if (!res.ok) throw new Error(`/pubkey returned HTTP ${res.status}`);
-  const body = (await res.json()) as { keys?: Array<{ publicKeyBase64?: string }> };
-  return new Set((body.keys ?? []).map((k) => k.publicKeyBase64).filter((k): k is string => typeof k === "string"));
+  let body: { keys?: unknown };
+  try { body = (await res.json()) as { keys?: unknown }; }
+  catch { throw new Error("/pubkey returned invalid JSON"); }
+  const rawKeys = Array.isArray(body.keys) ? body.keys : [];
+  return new Set(
+    rawKeys
+      .filter((k): k is { publicKeyBase64?: unknown } => !!k && typeof k === "object")
+      .map((k) => (k as { publicKeyBase64?: unknown }).publicKeyBase64)
+      .filter((k): k is string => typeof k === "string"),
+  );
 };
 
 /** Verify a receipt AND confirm it was signed by Raven's currently-published key. */

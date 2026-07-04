@@ -57,6 +57,54 @@ const main = async (): Promise<number> => {
   server.closeAllConnections?.();
   server.close();
 
+  // A server that returns a fixed status/body for /pubkey — used to prove
+  // fetchPublishedKeys is robust to malformed-but-valid-JSON responses.
+  const startResponder = async (status: number, responseBody: string): Promise<{ url: string; close: () => void }> => {
+    const s = createServer((_req, res) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(responseBody);
+    });
+    await new Promise<void>((resolve) => s.listen(0, "127.0.0.1", () => resolve()));
+    const addr = s.address();
+    const p = typeof addr === "object" && addr ? addr.port : 0;
+    return {
+      url: `http://127.0.0.1:${p}`,
+      close: () => { s.closeAllConnections?.(); s.close(); },
+    };
+  };
+
+  // Non-array `keys` → empty Set, no throw.
+  {
+    const responder = await startResponder(200, JSON.stringify({ keys: "not-an-array" }));
+    let err: Error | null = null;
+    let result: Set<string> | null = null;
+    try { result = await fetchPublishedKeys(responder.url, fetch, 2000); } catch (e) { err = e as Error; }
+    responder.close();
+    check("non-array keys does not throw", err === null);
+    check("non-array keys yields empty Set", result?.size === 0);
+  }
+
+  // Null entries + non-object entries filtered; only valid publicKeyBase64 kept.
+  {
+    const responder = await startResponder(200, JSON.stringify({ keys: [null, { publicKeyBase64: "abc" }, {}] }));
+    let err: Error | null = null;
+    let result: Set<string> | null = null;
+    try { result = await fetchPublishedKeys(responder.url, fetch, 2000); } catch (e) { err = e as Error; }
+    responder.close();
+    check("malformed keys array does not throw", err === null);
+    check("malformed keys array yields only valid key", result?.size === 1 && result.has("abc"));
+  }
+
+  // Non-JSON body → labeled error mentioning invalid JSON.
+  {
+    const responder = await startResponder(200, "not json");
+    let err: Error | null = null;
+    try { await fetchPublishedKeys(responder.url, fetch, 2000); } catch (e) { err = e as Error; }
+    responder.close();
+    check("non-JSON body rejects", err !== null);
+    check("non-JSON body error mentions invalid JSON", /invalid JSON/i.test(err?.message ?? ""));
+  }
+
   console.log(
     failures === 0
       ? "\n✅ fetch timeout regression checks passed."
