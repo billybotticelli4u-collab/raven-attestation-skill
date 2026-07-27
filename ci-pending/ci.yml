@@ -1,0 +1,37 @@
+# PENDING WORKFLOW — move this file to .github/workflows/ci.yml to activate.
+# The automation token that opened this PR lacks the `workflow` OAuth scope and
+# cannot push workflow files; the repo owner must move it (content unchanged).
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+
+  conformance:
+    # Second job per the closeout mandate: runs the normative verifier
+    # conformance corpus against this repo's verifier on every PR.
+    # STUB until the corpus lands (closeout item 1, -launchguard/conformance):
+    # the job skips cleanly while conformance/ is absent here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: run conformance corpus when available
+        run: |
+          if [ -f conformance/run.mjs ]; then
+            node conformance/run.mjs lib/ravenReceipt.ts lib/fixtures
+          else
+            echo "conformance corpus not landed yet — skipping (closeout item 1)"
+          fi

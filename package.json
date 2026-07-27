@@ -1,0 +1,13 @@
+{
+  "name": "raven-attestation-skill",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Independent, zero-dependency verifier for Raven Receipt v1 (agent skill).",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test lib/*.test.ts"
+  }
+}
