@@ -202,9 +202,19 @@ export const verifyRavenReceipt = (receipt: unknown, opts: VerifyOptions = {}): 
   if (r.disclaimer !== RECEIPT_DISCLAIMER) reasons.push("disclaimer_mismatch");
 
   const body = extractBody(r);
-  for (const w of findForbiddenWords(collectStrings(body))) reasons.push(`forbidden_word:${w}`);
-
-  if (recomputePayloadHash(body) !== r.payloadHash) reasons.push("payload_hash_mismatch");
+  // Forbidden-word walk + payload-hash recompute both recurse through
+  // attacker-shaped structures (findings[].evidence may nest arbitrarily), so
+  // any failure there — e.g. stack exhaustion from hostile nesting — is
+  // CONTAINED as an invalid-receipt reason. Hostile input must produce an
+  // outcome, never an exception.
+  let recomputed: string | null = null;
+  try {
+    for (const w of findForbiddenWords(collectStrings(body))) reasons.push(`forbidden_word:${w}`);
+    recomputed = recomputePayloadHash(body);
+  } catch {
+    reasons.push("canonicalization_failed");
+  }
+  if (recomputed !== null && recomputed !== r.payloadHash) reasons.push("payload_hash_mismatch");
   if (r.receiptId !== RECEIPT_ID_PREFIX + (r.payloadHash as string)) reasons.push("receipt_id_mismatch");
 
   const signedBytes = canonicalJsonStringify({
@@ -229,9 +239,18 @@ export const verifyRavenReceipt = (receipt: unknown, opts: VerifyOptions = {}): 
     if (!keyTrusted) reasons.push("key_untrusted");
   }
 
+  // Freshness is reported, NON-FATAL. Staleness ≠ tampered. An unparseable
+  // timestamp makes freshness UNPROVABLE — fail closed and report stale with a
+  // dedicated reason, never fresh-forever.
   const ageSeconds = (Date.parse(toIso(opts.now)) - Date.parse(r.timestamp as string)) / 1000;
-  const stale = Number.isFinite(ageSeconds) && ageSeconds > (r.maxAgeSeconds as number);
-  if (stale) reasons.push("stale");
+  let stale: boolean;
+  if (Number.isFinite(ageSeconds)) {
+    stale = ageSeconds > (r.maxAgeSeconds as number);
+    if (stale) reasons.push("stale");
+  } else {
+    stale = true;
+    reasons.push("timestamp_unparseable");
+  }
 
   return { valid, stale, reasons, ...(keyTrusted === undefined ? {} : { keyTrusted }) };
 };
