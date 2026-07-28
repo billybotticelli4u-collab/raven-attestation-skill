@@ -277,13 +277,18 @@ export const verifyRavenReceipt = (receipt: unknown, opts: VerifyOptions = {}): 
 // ---------------------------------------------------------------------------
 export const DEFAULT_VERIFIER_URL = "https://raven-hosted-verifier.onrender.com";
 
+/** Hard timeout for every network helper below — a hung or slow verifier must
+ *  never hang the caller. Fail-closed: the fetch rejects and the helper's
+ *  caller surfaces the failure, it never waits forever. */
+export const NETWORK_TIMEOUT_MS = 15_000;
+
 /** Fetch Raven's published signing keys from /pubkey. Use the returned set as
  *  `trustedKeys` to confirm a receipt was signed by Raven's published key. */
 export const fetchPublishedKeys = async (
   verifierUrl: string = DEFAULT_VERIFIER_URL,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Set<string>> => {
-  const res = await fetchImpl(`${verifierUrl.replace(/\/+$/, "")}/pubkey`);
+  const res = await fetchImpl(`${verifierUrl.replace(/\/+$/, "")}/pubkey`, { signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`/pubkey returned HTTP ${res.status}`);
   const body = (await res.json()) as { keys?: Array<{ publicKeyBase64?: string }> };
   return new Set((body.keys ?? []).map((k) => k.publicKeyBase64).filter((k): k is string => typeof k === "string"));
@@ -308,6 +313,7 @@ export const fetchReceipt = async (
   const url = `${(args.verifierUrl ?? DEFAULT_VERIFIER_URL).replace(/\/+$/, "")}/receipt/v1`;
   const res = await (args.fetchImpl ?? fetch)(url, {
     method: "POST",
+    signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
     headers: { "content-type": "application/json", "x-api-key": args.apiKey },
     body: JSON.stringify({
       mintAddress: args.mintAddress,
