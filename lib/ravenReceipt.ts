@@ -189,7 +189,7 @@ const toIso = (now: string | Date | undefined): string =>
  * reported but NON-FATAL. Reasons accumulate so a tampered receipt surfaces every
  * failed check.
  */
-export const verifyRavenReceipt = (receipt: unknown, opts: VerifyOptions = {}): VerifyResult => {
+const verifyRavenReceiptCore = (receipt: unknown, opts: VerifyOptions = {}): VerifyResult => {
   if (receipt === null || typeof receipt !== "object" || Array.isArray(receipt)) {
     return { valid: false, stale: false, reasons: ["shape_not_an_object"] };
   }
@@ -253,6 +253,23 @@ export const verifyRavenReceipt = (receipt: unknown, opts: VerifyOptions = {}): 
   }
 
   return { valid, stale, reasons, ...(keyTrusted === undefined ? {} : { keyTrusted }) };
+};
+
+/**
+ * Never-throws wrapper. Every path inside the core already turns hostile input
+ * into accumulated reasons; this backstop catches anything that still escapes
+ * them — e.g. a receipt object with a throwing getter, or a non-iterable
+ * `trustedKeys` value — so verification can NEVER throw into caller code.
+ * Fail-closed: the fallback reports invalid + stale with a single dedicated
+ * reason. For every input the core already handles (i.e. anything that does
+ * not throw), behavior is byte-exact: same valid, same stale, same reasons.
+ */
+export const verifyRavenReceipt = (receipt: unknown, opts: VerifyOptions = {}): VerifyResult => {
+  try {
+    return verifyRavenReceiptCore(receipt, opts);
+  } catch {
+    return { valid: false, stale: true, reasons: ["internal_error"], ...(opts.trustedKeys === undefined ? {} : { keyTrusted: false }) };
+  }
 };
 
 // ---------------------------------------------------------------------------
